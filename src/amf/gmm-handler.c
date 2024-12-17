@@ -324,6 +324,7 @@ ogs_nas_5gmm_cause_t gmm_handle_registration_request(amf_ue_t *amf_ue,
                 sizeof(registration_request->ue_security_capability.length));
     }
 
+    /*
     if (amf_selected_int_algorithm(amf_ue) ==
             OGS_NAS_SECURITY_ALGORITHMS_NIA0) {
         ogs_error("[UE:0x%x:0x%x], NEA0 can be used in Encrypt[0x%x], "
@@ -333,7 +334,8 @@ ogs_nas_5gmm_cause_t gmm_handle_registration_request(amf_ue_t *amf_ue,
             amf_selected_int_algorithm(amf_ue));
         return OGS_5GMM_CAUSE_UE_SECURITY_CAPABILITIES_MISMATCH;
     }
-
+    */
+    
     if (amf_ue_is_rat_restricted(amf_ue)) {
         ogs_error("Registration rejected due to RAT restrictions");
         return OGS_5GMM_CAUSE_5GS_SERVICES_NOT_ALLOWED;
