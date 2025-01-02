@@ -58,6 +58,46 @@ bool udm_nudm_ueau_handle_get(
         return false;
     }
 
+
+    // SUCI replay mitigation: implementation
+    if (udm_ue->suci_timer_running) {
+        // Timer running - allow authentication
+        ogs_debug("[%s] T3519 running, proceeding with authentication",
+                  udm_ue->suci);
+    } 
+    else if (udm_ue->last_suci && 
+             strcmp(udm_ue->last_suci, udm_ue->suci) == 0) {
+        // Timer expired and same SUCI - potential SUCI replay attack
+        ogs_error("[%s] SUCI replay attack detected", udm_ue->suci);
+
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(
+                stream, 
+                OGS_SBI_HTTP_STATUS_FORBIDDEN,
+                recvmsg, 
+                "SUCI Replay Attack Detected", 
+                udm_ue->suci, 
+                "SUCI_REPLAY_DETECTED"
+            )
+        );
+        return false;
+    } 
+    else {
+        // New SUCI or first request
+        if (udm_ue->last_suci)
+            ogs_free(udm_ue->last_suci);
+        udm_ue->last_suci = ogs_strdup(udm_ue->suci);
+
+        // Start timer
+        if (!udm_ue->suci_timer) {
+            udm_ue->suci_timer = ogs_timer_add(
+                ogs_app()->timer_mgr, udm_timer_suci_expire, udm_ue);
+        }
+        ogs_timer_start(udm_ue->suci_timer, ogs_time_from_sec(60)); // T3519 - in my case 60 seconds
+        udm_ue->suci_timer_running = true;
+    }
+
+
     if (udm_ue->serving_network_name)
         ogs_free(udm_ue->serving_network_name);
     udm_ue->serving_network_name =
@@ -773,4 +813,15 @@ bool udm_nudm_sdm_handle_subscription_delete(
     ogs_sbi_server_send_response(stream, response);
 
     return true;
+}
+
+// SUCI replay mitigation: when timer T3519 ran out, bool is set to false
+static void udm_timer_suci_expire(void *data)
+{
+    udm_ue_t *udm_ue = data;
+
+    ogs_assert(udm_ue);
+
+    ogs_debug("[%s] SUCI timer expired", udm_ue->suci);
+    udm_ue->suci_timer_running = false;
 }
