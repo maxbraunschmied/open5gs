@@ -20,7 +20,6 @@
 #include "sbi-path.h"
 #include "nnrf-handler.h"
 #include "nudm-handler.h"
-#include "udm-timer.h"
 
 bool udm_nudm_ueau_handle_get(
     udm_ue_t *udm_ue, ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg)
