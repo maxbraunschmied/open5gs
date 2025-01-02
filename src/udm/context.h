@@ -75,6 +75,11 @@ struct udm_ue_s {
 
     ogs_list_t sess_list;
     ogs_list_t sdm_subscription_list;
+
+    // SUCI replay mitigation: additional fields
+    ogs_timer_t *suci_timer;
+    char *last_suci;
+    bool suci_timer_running;
 };
 
 struct udm_sess_s {

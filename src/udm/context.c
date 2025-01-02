@@ -232,6 +232,11 @@ void udm_ue_remove(udm_ue_t *udm_ue)
     ogs_hash_set(self.supi_hash, udm_ue->supi, strlen(udm_ue->supi), NULL);
     ogs_free(udm_ue->supi);
 
+    // SUCI replay mitigation: if UE is removed, T3519 timer and stored SUCI should be cleared
+    if (udm_ue->suci_timer)
+        ogs_timer_delete(udm_ue->suci_timer);
+    if(udm_ue->last_suci)
+        ogs_free(udm_ue->last_suci);
     if (udm_ue->serving_network_name)
         ogs_free(udm_ue->serving_network_name);
     if (udm_ue->ausf_instance_id)
