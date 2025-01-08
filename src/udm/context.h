@@ -26,6 +26,9 @@
 
 #include "udm-sm.h"
 
+#include "udm-timer.h"
+#include "bloomfilter.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -35,12 +38,25 @@ extern int __udm_log_domain;
 #undef OGS_LOG_DOMAIN
 #define OGS_LOG_DOMAIN __udm_log_domain
 
+typedef struct active_suci_s {
+    ogs_timer_t *timer;
+    char * suci;
+} active_suci_t;
+
 typedef struct udm_context_s {
     ogs_list_t      udm_ue_list;
     ogs_list_t      sdm_subscription_list;
     ogs_hash_t      *suci_hash;
     ogs_hash_t      *supi_hash;
     ogs_hash_t      *sdm_subscription_id_hash;
+
+    ogs_hash_t      *active_suci_list;
+
+    /* using external bloom library libbloom: https://github.com/jvirkki/libbloom */
+    bloom           expired_suci_list;
+
+    /* libbloom is not thread-safe per default: https://github.com/jvirkki/libbloom/issues/23 */
+    ogs_thread_mutex_t  bloom_mutex;
 
 } udm_context_t;
 
@@ -75,11 +91,6 @@ struct udm_ue_s {
 
     ogs_list_t sess_list;
     ogs_list_t sdm_subscription_list;
-
-    // SUCI replay mitigation: additional fields
-    ogs_timer_t *suci_timer;
-    char *last_suci;
-    bool suci_timer_running;
 };
 
 struct udm_sess_s {

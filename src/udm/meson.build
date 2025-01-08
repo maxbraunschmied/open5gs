@@ -15,6 +15,21 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+libbloom_sources = files(
+  'libbloom/bloom.c',
+  'libbloom/MurmurHash2.c'
+)
+
+libbloom = static_library('bloom',
+    sources : libbloom_sources,
+    include_directories : srcinc,
+    install : false
+)
+
+libbloom_dep = declare_dependency(
+    link_with : libbloom
+)
+
 libudm_sources = files('''
     context.c
     event.c
