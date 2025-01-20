@@ -422,3 +422,7 @@ int ogs_hash_do(ogs_hash_do_callback_fn_t *comp,
     }
     return dorv;
 }
+
+void ogs_hash_remove(ogs_hash_t *ht, const void *key, int klen) {
+    ogs_hash_set(ht, key, klen, NULL);
+}

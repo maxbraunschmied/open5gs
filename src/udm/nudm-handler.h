@@ -50,7 +50,7 @@ bool udm_nudm_sdm_handle_subscription_create(
 bool udm_nudm_sdm_handle_subscription_delete(
     udm_ue_t *udm_ue, ogs_sbi_stream_t *stream, ogs_sbi_message_t *recvmsg);
 
-static void udm_timer_suci_expire(void *data);
+void udm_timer_suci_expire(void *data);
 
 #ifdef __cplusplus
 }

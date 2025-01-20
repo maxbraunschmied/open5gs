@@ -18,6 +18,7 @@
  */
 
 #include "sbi-path.h"
+#include "context.h"
 
 static udm_context_t self;
 
@@ -57,6 +58,18 @@ void udm_context_init(void)
     self.sdm_subscription_id_hash = ogs_hash_make();
     ogs_assert(self.sdm_subscription_id_hash);
 
+    /* Mapping each SUCI to a T3519 timer, respectively
+    UDM handles 1024 active SUCIs at the same time */
+    self.active_suci_map = ogs_hash_make();
+
+    /* List contains SUCIs that have ocurred in the past 
+        UDM can store up to 10^6 SUCI entries with a maximum of 0.1% false positives
+        A bloom filter is used to reduce space complexity */
+    bloom_init2(&self.expired_suci_list, 1000000, 0.001);
+
+    /* libbloom is not thread-safe per default: https://github.com/jvirkki/libbloom/issues/23 */
+    ogs_thread_mutex_init(&self.bloom_mutex);
+
     context_initialized = 1;
 }
 
@@ -76,6 +89,17 @@ void udm_context_final(void)
     ogs_pool_final(&udm_ue_pool);
     ogs_pool_final(&udm_sess_pool);
     ogs_pool_final(&udm_sdm_subscription_pool);
+
+    /* Cleaning up active SUCI map and expired SUCI list after UDM stops */
+    void *rec = NULL;
+    ogs_hash_do((ogs_hash_do_callback_fn_t *)udm_remove_active_suci_wrapper, rec, self.active_suci_map);
+    ogs_hash_destroy(self.active_suci_map);
+
+    /* libbloom is not thread-safe per default: https://github.com/jvirkki/libbloom/issues/23 */
+    ogs_thread_mutex_lock(&self.bloom_mutex);
+    bloom_free(&self.expired_suci_list);
+    ogs_thread_mutex_unlock(&self.bloom_mutex);
+    ogs_thread_mutex_destroy(&self.bloom_mutex);
 
     context_initialized = 0;
 }
@@ -232,11 +256,6 @@ void udm_ue_remove(udm_ue_t *udm_ue)
     ogs_hash_set(self.supi_hash, udm_ue->supi, strlen(udm_ue->supi), NULL);
     ogs_free(udm_ue->supi);
 
-    // SUCI replay mitigation: if UE is removed, T3519 timer and stored SUCI should be cleared
-    if (udm_ue->suci_timer)
-        ogs_timer_delete(udm_ue->suci_timer);
-    if(udm_ue->last_suci)
-        ogs_free(udm_ue->last_suci);
     if (udm_ue->serving_network_name)
         ogs_free(udm_ue->serving_network_name);
     if (udm_ue->ausf_instance_id)
@@ -435,6 +454,24 @@ void udm_sdm_subscription_remove_all(udm_ue_t *udm_ue)
     ogs_list_for_each_safe(&udm_ue->sdm_subscription_list,
             next_sdm_subscription, sdm_subscription)
         udm_sdm_subscription_remove(sdm_subscription);
+}
+
+int udm_remove_active_suci_wrapper(void *rec, const void *key, int klen, const void *val) {
+    udm_remove_active_suci(key, klen, val);
+    return 1;
+}
+
+void udm_remove_active_suci(const void *key, int klen, const void *value) {
+    active_suci_t *entry = (active_suci_t *)value;
+    if(!entry) return;
+
+    if(entry->timer)
+        ogs_timer_delete(entry->timer);
+    if(entry->suci)
+        ogs_free(entry->suci);
+
+    ogs_free(entry);
+    
 }
 
 udm_sdm_subscription_t *udm_sdm_subscription_find_by_id(char *id)

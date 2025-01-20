@@ -84,6 +84,8 @@ typedef int (ogs_hash_do_callback_fn_t)(
 int ogs_hash_do(ogs_hash_do_callback_fn_t *comp,
         void *rec, const ogs_hash_t *ht);
 
+void ogs_hash_remove(ogs_hash_t *ht, const void *key, int klen);
+
 
 #ifdef __cplusplus
 }

@@ -35,12 +35,20 @@ libudm_sources = files('''
 
 libudm = static_library('udm',
     sources : libudm_sources,
-    dependencies : libsbi_dep,
-    install : false)
+    dependencies : [
+        libsbi_dep,
+        libbloom_dep
+    ],
+    install : false
+)
 
 libudm_dep = declare_dependency(
     link_with : libudm,
-    dependencies : libsbi_dep)
+    dependencies : [
+        libsbi_dep,
+        libbloom_dep
+    ]
+)
 
 udm_sources = files('''
     app.c
@@ -51,6 +59,7 @@ executable('open5gs-udmd',
     sources : udm_sources,
     c_args : '-DDEFAULT_CONFIG_FILENAME="@0@/udm.yaml"'.format(open5gs_sysconfdir),
     include_directories : srcinc,
+    link_args : ['-lm'],
     dependencies : libudm_dep,
     install_rpath : libdir,
     install : true)

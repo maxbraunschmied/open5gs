@@ -58,18 +58,19 @@ bool udm_nudm_ueau_handle_get(
         return false;
     }
 
+    /* ******************************* 
+        SUCI-Catcher Mitigation START
+    ********************************** */
 
-    // SUCI replay mitigation: implementation
-    if (udm_ue->suci_timer_running) {
-        // Timer running - allow authentication
-        ogs_debug("[%s] T3519 running, proceeding with authentication",
-                  udm_ue->suci);
-    } 
-    else if (udm_ue->last_suci && 
-             strcmp(udm_ue->last_suci, udm_ue->suci) == 0) {
-        // Timer expired and same SUCI - potential SUCI replay attack
-        ogs_error("[%s] SUCI replay attack detected", udm_ue->suci);
+    udm_context_t *udm_ctx = udm_self();
 
+    /* libbloom is not thread-safe per default: https://github.com/jvirkki/libbloom/issues/23 */
+    ogs_thread_mutex_lock(&udm_ctx->bloom_mutex);
+
+    /* Check if SUCI is in bloom filter */
+    if(bloom_check(&udm_ctx->expired_suci_list, udm_ue->suci, strlen(udm_ue->suci))) {
+        ogs_warn("[%s] SUCI found in Bloom filter! Replay attack is very likely (99.9%%)", udm_ue->suci);
+        ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
         ogs_assert(true ==
             ogs_sbi_server_send_error(
                 stream, 
@@ -81,21 +82,45 @@ bool udm_nudm_ueau_handle_get(
             )
         );
         return false;
-    } 
-    else {
-        // New SUCI or first request
-        if (udm_ue->last_suci)
-            ogs_free(udm_ue->last_suci);
-        udm_ue->last_suci = ogs_strdup(udm_ue->suci);
-
-        // Start timer
-        if (!udm_ue->suci_timer) {
-            udm_ue->suci_timer = ogs_timer_add(
-                ogs_app()->timer_mgr, udm_timer_suci_expire, udm_ue);
-        }
-        ogs_timer_start(udm_ue->suci_timer, ogs_time_from_sec(60)); // T3519 - in my case 60 seconds
-        udm_ue->suci_timer_running = true;
     }
+
+    /* If it's a new SUCI, create a new entry for active SUCIs */
+    active_suci_t *entry = ogs_calloc(1, sizeof *entry);
+    if(!entry) {
+        ogs_error("Could not allocate active entry for SUCI [%s]!", udm_ue->suci);
+        ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
+        return false;
+    }
+
+    /* Set SUCI in active entry */
+    entry->suci = ogs_strdup(udm_ue->suci);
+    if(!entry->suci) {
+        ogs_error("Could not duplicate SUCI [%s]!", udm_ue->suci);
+        ogs_free(entry);
+        ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
+        return false;
+    }
+
+    /* Active SUCI entry is added to the map */
+    ogs_hash_set(udm_ctx->active_suci_map, entry->suci, sizeof(*entry), entry);
+
+    /* Create T3519 (60s) for entry and start it */
+    entry->timer = ogs_timer_add(ogs_app()->timer_mgr, udm_timer_suci_expire, entry);
+    if(!entry->timer) {
+        ogs_error("Could not add timer to SUCI [%s]!", udm_ue->suci);
+        ogs_hash_remove(udm_ctx->active_suci_map, entry->suci, strlen(entry->suci));
+        ogs_free(entry);
+        ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
+        return false;
+    }
+    ogs_timer_start(entry->timer, ogs_time_from_sec(60));
+    ogs_info("Started T3519 timer for SUCI [%s]", entry->suci);
+
+    ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
+
+    /* ******************************* 
+        SUCI-Catcher Mitigation END
+    ********************************** */
 
 
     if (udm_ue->serving_network_name)
@@ -815,13 +840,33 @@ bool udm_nudm_sdm_handle_subscription_delete(
     return true;
 }
 
-// SUCI replay mitigation: when timer T3519 ran out, bool is set to false
-static void udm_timer_suci_expire(void *data)
+/* When T3519 ran out, the SUCI is added to the bloom filter */
+void udm_timer_suci_expire(void *data)
 {
-    udm_ue_t *udm_ue = data;
+    active_suci_t *entry = (active_suci_t *)data;
+    ogs_assert(entry);
 
-    ogs_assert(udm_ue);
+    udm_context_t *udm_ctx = udm_self();
+    ogs_assert(udm_ctx);
 
-    ogs_debug("[%s] SUCI timer expired", udm_ue->suci);
-    udm_ue->suci_timer_running = false;
+    /* libbloom is not thread-safe per default: https://github.com/jvirkki/libbloom/issues/23 */
+    ogs_thread_mutex_lock(&udm_ctx->bloom_mutex);
+
+    /* Remove the SUCI from the map of active SUCIs */
+    ogs_hash_remove(udm_ctx->active_suci_map, entry->suci, strlen(entry->suci));
+
+    /* Add SUCI to bloom filter */
+    bloom_add(&udm_ctx->expired_suci_list, entry->suci, strlen(entry->suci));
+
+    /* Clean up active entry */
+    if (entry->timer)
+        ogs_timer_delete(entry->timer);
+    if (entry->suci)
+        ogs_free(entry->suci);
+
+    ogs_free(entry);
+
+    ogs_info("SUCI removed from active list and added to Bloom Filter!");
+
+    ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
 }
