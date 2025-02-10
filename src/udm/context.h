@@ -48,10 +48,14 @@ typedef struct udm_context_s {
     ogs_hash_t      *supi_hash;
     ogs_hash_t      *sdm_subscription_id_hash;
 
-    ogs_hash_t      *active_suci_map;
+    /* hash set storing active SUCIs together with their T3519 timer */
+    ogs_hash_t      *active_suci_hash;
 
-    /* using external bloom library libbloom: https://github.com/jvirkki/libbloom */
-    struct bloom    expired_suci_list;
+    /* hash set storing all expired SUCIs */
+    ogs_hash_t      *expired_suci_hash;
+
+    /* bloom filter storing expired SUCIs, using external bloom library libbloom: https://github.com/jvirkki/libbloom */
+    struct bloom    expired_suci_bloom;
 
     /* libbloom is not thread-safe per default: https://github.com/jvirkki/libbloom/issues/23 */
     ogs_thread_mutex_t  bloom_mutex;

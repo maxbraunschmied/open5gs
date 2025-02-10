@@ -58,14 +58,14 @@ void udm_context_init(void)
     self.sdm_subscription_id_hash = ogs_hash_make();
     ogs_assert(self.sdm_subscription_id_hash);
 
-    /* Mapping each SUCI to a T3519 timer, respectively
-    UDM handles 1024 active SUCIs at the same time */
-    self.active_suci_map = ogs_hash_make();
+    /* Creating a hash set for storing active SUCIs */
+    self.active_suci_hash = ogs_hash_make();
 
-    /* List contains SUCIs that have ocurred in the past 
-        UDM can store up to 10^6 SUCI entries with a maximum of 0.1% false positives
-        A bloom filter is used to reduce space complexity */
-    bloom_init2(&self.expired_suci_list, 1000000, 0.001);
+    /* Creating a hash set for storing expired SUCIs */
+    self.expired_suci_hash = ogs_hash_make();
+
+    /* Bloom filter stores SUCIs that have ocurred in the past (up to 10^6 SUCI entries with a maximum of 0.1% false positives) */
+    bloom_init2(&self.expired_suci_bloom, 1000000, 0.001);
 
     /* libbloom is not thread-safe per default: https://github.com/jvirkki/libbloom/issues/23 */
     ogs_thread_mutex_init(&self.bloom_mutex);
@@ -90,14 +90,17 @@ void udm_context_final(void)
     ogs_pool_final(&udm_sess_pool);
     ogs_pool_final(&udm_sdm_subscription_pool);
 
-    /* Cleaning up active SUCI map and expired SUCI list after UDM stops */
+    /* Cleaning up active SUCI hash set and expired SUCI list after UDM stops */
     void *rec = NULL;
-    ogs_hash_do((ogs_hash_do_callback_fn_t *)udm_remove_active_suci_wrapper, rec, self.active_suci_map);
-    ogs_hash_destroy(self.active_suci_map);
+    ogs_hash_do((ogs_hash_do_callback_fn_t *)udm_remove_active_suci_wrapper, rec, self.active_suci_hash);
+    ogs_hash_destroy(self.active_suci_hash);
 
-    /* libbloom is not thread-safe per default: https://github.com/jvirkki/libbloom/issues/23 */
+    /* Cleaning up expired SUCI hash set */
+    ogs_hash_destroy(self.expired_suci_hash);
+
+    /* Cleaning up bloom filter, libbloom is not thread-safe per default: https://github.com/jvirkki/libbloom/issues/23 */
     ogs_thread_mutex_lock(&self.bloom_mutex);
-    bloom_free(&self.expired_suci_list);
+    bloom_free(&self.expired_suci_bloom);
     ogs_thread_mutex_unlock(&self.bloom_mutex);
     ogs_thread_mutex_destroy(&self.bloom_mutex);
 
