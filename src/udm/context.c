@@ -32,6 +32,8 @@ static int context_initialized = 0;
 
 static int max_num_of_udm_sdm_subscriptions = 0;
 
+static const char *filename = "filter.bloom";
+
 void udm_context_init(void)
 {
     ogs_assert(context_initialized == 0);
@@ -61,14 +63,22 @@ void udm_context_init(void)
     /* Creating a hash set for storing active SUCIs */
     self.active_suci_hash = ogs_hash_make();
 
-    /* Creating a hash set for storing expired SUCIs */
-    self.expired_suci_hash = ogs_hash_make();
-
-    /* Bloom filter stores SUCIs that have ocurred in the past (up to 10^6 SUCI entries with a maximum of 0.1% false positives) */
-    bloom_init2(&self.expired_suci_bloom, 1000000, 0.001);
-
     /* libbloom is not thread-safe per default: https://github.com/jvirkki/libbloom/issues/23 */
     ogs_thread_mutex_init(&self.bloom_mutex);
+
+    /* Loading up previously saved Bloom filter. If no filter exists, we create a new one */
+    int load_result = bloom_load(&self.expired_suci_bloom, (char *)filename);
+    if (load_result == 0) {
+        ogs_info("Successfully loaded bloom filter from %s", filename);
+    } else {
+        if (load_result == 3) {
+            ogs_info("No existing bloom filter found, creating a new one");
+        } else {
+            ogs_warn("Failed to load bloom filter from %s (error code: %d), creating a new one", filename, load_result);
+        }
+         /* Bloom filter stores SUCIs that have ocurred in the past (up to 10^6 SUCI entries with a maximum of 0.1% false positives) */
+        bloom_init2(&self.expired_suci_bloom, 1000000, 0.001);
+    }
 
     context_initialized = 1;
 }
@@ -95,11 +105,15 @@ void udm_context_final(void)
     ogs_hash_do((ogs_hash_do_callback_fn_t *)udm_remove_active_suci_wrapper, rec, self.active_suci_hash);
     ogs_hash_destroy(self.active_suci_hash);
 
-    /* Cleaning up expired SUCI hash set */
-    ogs_hash_destroy(self.expired_suci_hash);
 
     /* Cleaning up bloom filter, libbloom is not thread-safe per default: https://github.com/jvirkki/libbloom/issues/23 */
     ogs_thread_mutex_lock(&self.bloom_mutex);
+    /* Save bloom filter, so collected SUCIs are not lost and can be loaded up again with next start */
+    if (bloom_save(&self.expired_suci_bloom, (char *)filename) == 0) { 
+        ogs_info("Successfully saved bloom filter to %s", filename);
+    } else {
+        ogs_warn("Failed to save bloom filter to %s", filename);
+    }
     bloom_free(&self.expired_suci_bloom);
     ogs_thread_mutex_unlock(&self.bloom_mutex);
     ogs_thread_mutex_destroy(&self.bloom_mutex);

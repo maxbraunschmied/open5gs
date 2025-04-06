@@ -71,58 +71,56 @@ bool udm_nudm_ueau_handle_get(
     if(bloom_check(&udm_ctx->expired_suci_bloom, udm_ue->suci, strlen(udm_ue->suci))) {
         ogs_warn("[%s] SUCI found in Bloom filter! Replay attack is very likely (99.9%%)", udm_ue->suci);
         ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
-        
-        /* Verify if actual replay attack and not False Positive by checking expired SUCI hash set */
-        if(ogs_hash_get(udm_ctx->expired_suci_hash, udm_ue->suci, strlen(udm_ue->suci))) {
-            ogs_assert(true ==
-                ogs_sbi_server_send_error(
-                    stream, 
-                    OGS_SBI_HTTP_STATUS_FORBIDDEN,
-                    recvmsg, 
-                    "SUCI Replay Attack Detected", 
-                    udm_ue->suci, 
-                    "SUCI_REPLAY_DETECTED"
-                )
-            );
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(
+                stream, 
+                OGS_SBI_HTTP_STATUS_FORBIDDEN,
+                recvmsg, 
+                "SUCI Replay Attack Detected", 
+                udm_ue->suci, 
+                "SUCI_REPLAY_DETECTED"
+            )
+        );
+        return false;
+    }
+
+    /* Check if SUCI is in active hash set (T3519 still running) */
+    active_suci_t *entry = (active_suci_t *)ogs_hash_get(udm_ctx->active_suci_hash, entry->suci, strlen(entry->suci));
+    if(!entry) {
+        /* If it's a new SUCI, create a new entry for active SUCIs */
+        entry = ogs_calloc(1, sizeof *entry);
+        if(!entry) {
+            ogs_error("Could not allocate active entry for SUCI [%s]!", udm_ue->suci);
+            ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
             return false;
         }
-        /* Bloom filter check was a False Positive */
-        ogs_info("[%s] SUCI found in Bloom filter was a False Positive! No replay attack detected", udm_ue->suci);
-    }
 
-    /* If it's a new SUCI, create a new entry for active SUCIs */
-    active_suci_t *entry = ogs_calloc(1, sizeof *entry);
-    if(!entry) {
-        ogs_error("Could not allocate active entry for SUCI [%s]!", udm_ue->suci);
+        /* Set SUCI in active entry */
+        entry->suci = ogs_strdup(udm_ue->suci);
+        if(!entry->suci) {
+            ogs_error("Could not duplicate SUCI [%s]!", udm_ue->suci);
+            ogs_free(entry);
+            ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
+            return false;
+        }
+
+        /* Active SUCI entry is added to the hash set */
+        ogs_hash_set(udm_ctx->active_suci_hash, entry->suci, sizeof(*entry), entry);
+
+        /* Create T3519 (60s) for entry and start it */
+        entry->timer = ogs_timer_add(ogs_app()->timer_mgr, udm_timer_suci_expire, entry);
+        if(!entry->timer) {
+            ogs_error("Could not add timer to SUCI [%s]!", udm_ue->suci);
+            ogs_hash_remove(udm_ctx->active_suci_hash, entry->suci, strlen(entry->suci));
+            ogs_free(entry);
+            ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
+            return false;
+        }
+        ogs_timer_start(entry->timer, ogs_time_from_sec(60));
+        ogs_info("Started T3519 timer for SUCI [%s]", entry->suci);
+
         ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
-        return false;
     }
-
-    /* Set SUCI in active entry */
-    entry->suci = ogs_strdup(udm_ue->suci);
-    if(!entry->suci) {
-        ogs_error("Could not duplicate SUCI [%s]!", udm_ue->suci);
-        ogs_free(entry);
-        ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
-        return false;
-    }
-
-    /* Active SUCI entry is added to the hash set */
-    ogs_hash_set(udm_ctx->active_suci_hash, entry->suci, sizeof(*entry), entry);
-
-    /* Create T3519 (60s) for entry and start it */
-    entry->timer = ogs_timer_add(ogs_app()->timer_mgr, udm_timer_suci_expire, entry);
-    if(!entry->timer) {
-        ogs_error("Could not add timer to SUCI [%s]!", udm_ue->suci);
-        ogs_hash_remove(udm_ctx->active_suci_hash, entry->suci, strlen(entry->suci));
-        ogs_free(entry);
-        ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
-        return false;
-    }
-    ogs_timer_start(entry->timer, ogs_time_from_sec(60));
-    ogs_info("Started T3519 timer for SUCI [%s]", entry->suci);
-
-    ogs_thread_mutex_unlock(&udm_ctx->bloom_mutex);
 
     /* ******************************* 
         SUCI-Catcher Mitigation END
